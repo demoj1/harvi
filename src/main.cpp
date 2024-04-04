@@ -8,8 +8,8 @@
 #include <unistd.h>
 #include <thread>
 #include <raylib.h>
-#include <chrono>
 #include <date/date.h>
+#include <chrono>
 #include "./font.h"
 
 #define JSON_HAS_RANGES 0
@@ -71,7 +71,8 @@ datetime ParseISO8601(const std::string& input)
 
 bool check_json_mime(string mime_type) {
   return mime_type == "application/json; charset=utf-8"
-      || mime_type == "application/json";
+      || mime_type == "application/json"
+      || mime_type == "application/json;charset=utf-8";
 }
 
 template <typename T>
@@ -84,6 +85,32 @@ constexpr T _map(T x, T in_min, T in_max, T out_min, T out_max) noexcept {
   return ((T)x - (T)in_min) * ((T)out_max - (T)out_min) / ((T)in_max - (T)in_min) + (T)out_min;
 }
 
+string pretty_bytes(uint bytes) {
+    stringstream sm;
+
+    const char* suffixes[7];
+    suffixes[0] = "B";
+    suffixes[1] = "KB";
+    suffixes[2] = "MB";
+    suffixes[3] = "GB";
+    suffixes[4] = "TB";
+    suffixes[5] = "PB";
+    suffixes[6] = "EB";
+    uint s = 0; // which suffix to use
+    double count = bytes;
+    while (count >= 1024 && s < 7)
+    {
+        s++;
+        count /= 1024;
+    }
+
+    if (count - floor(count) == 0.0)
+      sm << count << suffixes[s];
+    else
+      sm << fixed << setprecision(2) << count << suffixes[s];
+
+    return sm.str();
+}
 
 class HarEntry {
 public:
@@ -98,6 +125,7 @@ public:
   string response__content;
   string response__error;
   int response__status;
+  int response__body_size;
 
   float time;
   float time__blocked;
@@ -133,36 +161,46 @@ public:
     request__url = entry["request"]["url"];
     request__method = entry["request"]["method"];
 
-    if (request__method == "POST" && entry["request"]["postData"].is_object() && entry["request"]["postData"]["mimeType"].is_string()) {
-      if (check_json_mime(entry["request"]["postData"]["mimeType"]))
-        request__content = json::parse(entry["request"]["postData"]["text"].get<string>()).dump(4);
-      else
-        request__content = entry["request"]["postData"]["text"];
-    } else {
-      request__content = "<EMPTY>";
+    try {
+      if (request__method == "POST" && entry["request"]["postData"].is_object() && entry["request"]["postData"]["mimeType"].is_string()) {
+        if (check_json_mime(entry["request"]["postData"]["mimeType"]))
+          request__content = json::parse(entry["request"]["postData"]["text"].get<string>()).dump(4);
+        else
+          request__content = entry["request"]["postData"]["text"];
+      } else {
+        request__content = "<EMPTY>";
+      }
+    } catch (...) {
+      request__content = "<ERROR>";
     }
 
-    if (entry["response"].is_object() && entry["response"]["_error"].is_string()) {
-      response__error = entry["response"]["_error"];
-    }
+    if (entry["response"].is_object()) {
+      if (entry["response"]["_error"].is_string()) response__error = entry["response"]["_error"];
+      if (entry["response"]["status"].is_number()) response__status = entry["response"]["status"];
+      else response__status = 0;
+      if (entry["response"]["bodySize"].is_number()) response__body_size = entry["response"]["bodySize"];
 
-    int bodySize = entry["response"]["bodySize"];
-    if (entry["response"]["content"].is_object()
-     && entry["response"]["content"]["text"].is_string()
-     && bodySize > 0
-     && entry["response"]["content"]["text"] != "") {
-      if (check_json_mime(entry["response"]["content"]["mimeType"]))
-        response__content = json::parse(entry["response"]["content"]["text"].get<string>()).dump(4);
-      else
-        response__content = entry["response"]["content"]["text"];
-    } else {
-      response__content = "<EMPTY>";
-    }
+      try {
+        int bodySize = 0;
+        if (entry["response"]["bodySize"].is_number()) bodySize = entry["response"]["bodySize"];
+        int size = 0;
+        if (entry["response"]["content"].is_object() && entry["response"]["content"]["size"].is_number()) bodySize = entry["response"]["content"]["size"];
 
-    if (entry["response"]["status"].is_number())
-      response__status = entry["response"]["status"];
-    else
-      response__status = 0;
+        if (entry["response"]["content"].is_object()
+         && entry["response"]["content"]["text"].is_string()
+         && (bodySize > 0 || size > 0)
+         && entry["response"]["content"]["text"] != "") {
+          if (check_json_mime(entry["response"]["content"]["mimeType"]))
+            response__content = json::parse(entry["response"]["content"]["text"].get<string>()).dump(4);
+          else
+            response__content = entry["response"]["content"]["text"];
+        } else {
+          response__content = "<EMPTY>";
+        }
+      } catch (const std::exception& ex) {
+        response__content = ex.what();
+      }
+    }
 
     collapse = false;
     hover = false;
@@ -170,6 +208,9 @@ public:
 
   float render(Rectangle b, float start_x, float width) {
     float height = 40;
+
+    if (b.y > GetScreenHeight() + 150) return 0.0;
+    if (b.y < 0) return 40;
 
     if (CheckCollisionPointRec(GetMousePosition(), {0, b.y, static_cast<float>(GetScreenWidth()), height-1})) {
       hover = true;
@@ -195,11 +236,21 @@ public:
       DrawRectangleLinesEx({0, b.y, static_cast<float>(GetScreenWidth()), height-1}, hover ? 3 : 1, BLUE);
     }
 
-    Rectangle rect = {start_x, b.y + 4, width < 1 ? 1 : width, height - 8};
+    Rectangle rect = {start_x, b.y + 4, width < 3 ? 3 : width, height - 8};
     DrawRectangleRec(rect, color);
 
+    // std::chrono::current_zone()->to_local(
+    //         std::chrono::system_clock::now())).str().substr(0, 23);
+    // }
+
     stringstream sm;
-    sm << request__method << " " << response__status << " time: " << duration;
+    sm << request__method << " "
+      << response__status << " [duration: " << duration
+                                            << ", size: "
+                                            << pretty_bytes(response__body_size)
+                                            << ", at: "
+                                            << chrono::current_zone()->to_local(strated_date_time)
+                                            << "]";
 
     if (response__error != "")
       sm << " ERROR: " << response__error;
@@ -218,6 +269,14 @@ public:
 
     if (collapse) {
       stringstream sm;
+      sm << ">>> info: " << endl
+         << "started at " << chrono::current_zone()->to_local(strated_date_time) << " (localtime)" << endl
+         << "started at " << strated_date_time << " (UTC)"
+         << endl;
+
+      height += DrawTextExx(sm.str(), {rect.x + 3, b.y + height}, BLACK).y;
+
+      sm = stringstream();
       sm << ">>> timings: "
          << "blocked " << time__blocked << "ms, "
          << "dns " << time__dns << "ms, "
@@ -268,9 +327,11 @@ struct wProgressBar {
     DrawRectangleLinesEx(b, 2.0, BLUE);
     DrawTextExxCenter(this->title, b, BLACK);
 
-    if (fabs(progress - target_progress) > 0.001f) {
+    if (fabs(progress - target_progress) > 0.02f) {
       if (progress < target_progress) progress += target_progress * GetFrameTime() * 3;
       else progress -= target_progress * GetFrameTime() * 3;
+
+      progress = progress > target_progress ? target_progress : progress;
     }
   }
 };
@@ -280,6 +341,7 @@ private:
   duration all_duration;
   duration min_duration;
   duration max_duration;
+  thread _thread;
 
 public:
   wProgressBar bar;
@@ -350,39 +412,41 @@ public:
     bar.render({b.x + 30, b.y + b.height/2 - 60/2, b.width - 60, 60});
   }
 
-  void LoadEntites(json json) {
-    entries.clear();
-    size_t count_elements = json["entries"].size();
-    int i = 0;
+  void LoadEntites(std::filesystem::path&& file_path) {
+    _thread = thread([=]() {
+      bar.set_title(string("Parse har archive file: ") + file_path.c_str());
 
-    bar.set_title(string("Loading har... ") + to_string(i) + "/" + to_string(count_elements));
+      ifstream json_file(file_path);
+      json data = json::parse(json_file);
 
-    for (auto& entry : json["entries"]) {
-      entries.push_back(HarEntry(entry));
-      i++;
-      bar.set_progress((i * 100.0 / count_elements) / 100.0);
+      auto _json = data["log"];
+
+      vector<HarEntry> new_entries;
+      size_t count_elements = _json["entries"].size();
+      int i = 0;
+      cout << "SIZE: " << count_elements;
+
       bar.set_title(string("Loading har... ") + to_string(i) + "/" + to_string(count_elements));
-    }
 
-    datetime min = entries[0].strated_date_time;
-    datetime max = entries[entries.size() - 1].ended_date_time;
+      for (auto& entry : _json["entries"]) {
+        new_entries.push_back(HarEntry(entry));
+        i++;
+        this->bar.set_progress((i * 100.0 / count_elements) / 100.0);
+        this->bar.set_title(string("Loading har... ") + to_string(i) + "/" + to_string(count_elements));
+      }
 
-    min_duration = min.time_since_epoch();
-    max_duration = max.time_since_epoch();
-    all_duration = max - min;
+      datetime min = new_entries[0].strated_date_time;
+      datetime max = new_entries[new_entries.size() - 1].ended_date_time;
+
+      this->min_duration = min.time_since_epoch();
+      this->max_duration = max.time_since_epoch();
+      this->all_duration = max - min;
+      this->entries = new_entries;
+    });
   }
 };
 
-auto parse_har_archive(const char* path) {
-  auto file_path = filesystem::path(path);
-  ifstream json_file(path);
-  json data = json::parse(json_file);
-
-  return data["log"];
-}
-
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
   auto window = new MainWindow();
 
   SetConfigFlags(FLAG_WINDOW_RESIZABLE);
@@ -391,8 +455,7 @@ int main(int argc, char* argv[])
   global_font = LoadFont_Terminus();
 
   if (argc > 1) {
-    auto entries_json = parse_har_archive(argv[1]);
-    window->LoadEntites(entries_json);
+    window->LoadEntites(argv[1]);
   }
 
   SetTextLineSpacing(22);
@@ -430,7 +493,7 @@ int main(int argc, char* argv[])
         scaleX += wheel.x / 8;
         scaleX = scaleX < 0.05 ? 0.05 : scaleX;
 
-        offsetY -= -wheel.y * 100;
+        offsetY -= -wheel.y * 140;
         offsetY = offsetY > 0 ? 0 : offsetY;
       }
     }
@@ -457,13 +520,11 @@ int main(int argc, char* argv[])
        auto file_path_list = LoadDroppedFiles();
        if (file_path_list.count >= 1) {
         auto ffile = std::filesystem::path(file_path_list.paths[0]);
-        auto entries_json = parse_har_archive(ffile.c_str());
-        window->LoadEntites(entries_json);
+        window->LoadEntites(std::move(ffile));
        }
 
        UnloadDroppedFiles(file_path_list);
-     }
-
+    }
 
     offsetY = -1*offsetY > window_height ? -1*window_height : offsetY;
 

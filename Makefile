@@ -18,7 +18,7 @@ OUT=$(OUT_DIR)/$(OUT_NAME)-$(OUT_POSTFIX)
 all: exe
 
 run: exe
-	$(OUT)
+	$(OUT) test2.har
 
 install: exe
 	cp $(OUT) ~/.local/bin/$(OUT_NAME)
