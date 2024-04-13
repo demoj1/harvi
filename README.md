@@ -1,6 +1,6 @@
 # Navigation
 
-https://github.com/demoj1/harvi/assets/10886027/790ef059-94a6-4633-9b5c-83e8acd72cc8
+https://github.com/demoj1/harvi/assets/10886027/7ee2ff8e-e43c-4456-8e07-824b4ba56c99
 
 Hold right mouse button for drag and move  
 Mouse wheel for OMG! scrolling  
