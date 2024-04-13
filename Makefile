@@ -27,7 +27,7 @@ debug: CXXFLAGS=$(STD) $(WARNINGS) -g $(SANITIZERS) -DDEBUG $(LIBS)
 debug: OUT_POSTFIX=debug
 debug: cleanup exe
 	rm -rf objs/*
-	GDK_SCALE=2 $(OUT) test2.har
+	$(OUT) xt-xarid.uz.har
 
 cleanup:
 	rm -rf ./$(OBJ_PREFIX)/*

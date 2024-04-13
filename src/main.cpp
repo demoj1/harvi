@@ -11,6 +11,7 @@
 #include <date/date.h>
 #include <chrono>
 #include "./font.h"
+#include "base64.hpp"
 
 #define JSON_HAS_RANGES 0
 #include "./json.hpp"
@@ -27,6 +28,118 @@ typedef enum Align {
   START,
   END
 };
+
+static void DrawTextBoxedSelectable(Font font, const char *text, int length, Rectangle rec, float fontSize, float spacing, bool wordWrap, Color tint, int selectStart, int selectLength, Color selectTint, Color selectBackTint)
+{
+
+    float textOffsetY = 0;          // Offset between lines (on line break '\n')
+    float textOffsetX = 0.0f;       // Offset X to next character to draw
+
+    float scaleFactor = fontSize/(float)font.baseSize*1.1;     // Character rectangle scaling factor
+
+    // Word/character wrapping mechanism variables
+    enum { MEASURE_STATE = 0, DRAW_STATE = 1 };
+    int state = wordWrap? MEASURE_STATE : DRAW_STATE;
+
+    int startLine = -1;         // Index where to begin drawing (where a line begins)
+    int endLine = -1;           // Index where to stop drawing (where a line ends)
+    int lastk = -1;             // Holds last value of the character position
+
+    for (int i = 0, k = 0; i < length; i++, k++)
+    {
+        int codepointByteCount = 0;
+        int codepoint = GetCodepoint(&text[i], &codepointByteCount);
+        int index = GetGlyphIndex(font, codepoint);
+
+        if (codepoint == 0x3f) codepointByteCount = 1;
+        i += (codepointByteCount - 1);
+
+        float glyphWidth = 0;
+        if (codepoint != '\n')
+        {
+            glyphWidth = (font.glyphs[index].advanceX == 0) ? font.recs[index].width*scaleFactor : font.glyphs[index].advanceX*scaleFactor;
+            if (i + 1 < length) glyphWidth = glyphWidth + spacing;
+        }
+
+        if (state == MEASURE_STATE)
+        {
+            if ((codepoint == ' ') || (codepoint == '\t') || (codepoint == '\n')) endLine = i;
+
+            if ((textOffsetX + glyphWidth) > rec.width)
+            {
+                endLine = (endLine < 1)? i : endLine;
+                if (i == endLine) endLine -= codepointByteCount;
+                if ((startLine + codepointByteCount) == endLine) endLine = (i - codepointByteCount);
+
+                state = !state;
+            }
+            else if ((i + 1) == length)
+            {
+                endLine = i;
+                state = !state;
+            }
+            else if (codepoint == '\n') state = !state;
+
+            if (state == DRAW_STATE)
+            {
+                textOffsetX = 0;
+                i = startLine;
+                glyphWidth = 0;
+
+                int tmp = lastk;
+                lastk = k - 1;
+                k = tmp;
+            }
+        }
+        else
+        {
+            if (codepoint == '\n')
+            {
+                if (!wordWrap)
+                {
+                    textOffsetY += (font.baseSize + font.baseSize/2)*scaleFactor;
+                    textOffsetX = 0;
+                }
+            }
+            else
+            {
+                if (!wordWrap && ((textOffsetX + glyphWidth) > rec.width))
+                {
+                    textOffsetY += (font.baseSize + font.baseSize/2)*scaleFactor;
+                    textOffsetX = 0;
+                }
+
+                if ((textOffsetY + font.baseSize*scaleFactor) > rec.height) break;
+
+                if ((codepoint != ' ') && (codepoint != '\t'))
+                {
+                    DrawTextCodepoint(font, codepoint, (Vector2){ rec.x + textOffsetX, static_cast<float>(rec.y + textOffsetY*0.6) }, fontSize, tint);
+                }
+            }
+
+            if (wordWrap && (i == endLine))
+            {
+                textOffsetY += (font.baseSize + font.baseSize/2)*scaleFactor;
+                textOffsetX = 0;
+                startLine = endLine;
+                endLine = -1;
+                glyphWidth = 0;
+                selectStart += lastk - k;
+                k = lastk;
+
+                state = !state;
+            }
+        }
+
+        textOffsetX += glyphWidth;  // avoid leading spaces
+    }
+}
+
+static void DrawTextBoxed(string text, Rectangle rec, Color tint)
+{
+    DrawTextBoxedSelectable(global_font, text.c_str(), text.size(), rec, 20, 0.4, true, tint, 0, 0, WHITE, WHITE);
+}
+
 
 Vector2 DrawTextExx(string text, Vector2 position, Color tint) {
   auto m = MeasureTextEx(global_font, text.c_str(), 20, 0.4);
@@ -114,6 +227,9 @@ string pretty_bytes(uint bytes) {
 
 class HarEntry {
 public:
+  string server_ip_address;
+  string from_cache;
+
   datetime strated_date_time;
   datetime ended_date_time;
   duration duration;
@@ -139,9 +255,15 @@ public:
   bool collapse;
   bool hover;
 
+  int max_render_height = 0;
+
 public:
   HarEntry(json entry) {
+    server_ip_address = entry["serverIPAddress"].is_string() ? entry["serverIPAddress"] : "";
+    from_cache = entry["_fromCache"].is_string() ? entry["_fromCache"] : "not cached";
+
     time = entry["time"];
+    time = time > 100'000'000 ? 1 : time;
 
     if (time != 0) {
       time__blocked = entry["timings"]["blocked"];
@@ -157,6 +279,7 @@ public:
     strated_date_time = ParseISO8601(_started_date_time);
     ended_date_time = ParseISO8601(_started_date_time) + chrono::milliseconds((int)time);
     duration = ended_date_time - strated_date_time;
+    duration = duration.count() > 100'000'000 ? duration::zero() : duration;
 
     request__url = entry["request"]["url"];
     request__method = entry["request"]["method"];
@@ -170,30 +293,40 @@ public:
       } else {
         request__content = "<EMPTY>";
       }
-    } catch (...) {
-      request__content = "<ERROR>";
+    } catch (const std::exception& ex) {
+      request__content = ex.what();
     }
 
     if (entry["response"].is_object()) {
       if (entry["response"]["_error"].is_string()) response__error = entry["response"]["_error"];
       if (entry["response"]["status"].is_number()) response__status = entry["response"]["status"];
       else response__status = 0;
-      if (entry["response"]["bodySize"].is_number()) response__body_size = entry["response"]["bodySize"];
 
       try {
         int bodySize = 0;
         if (entry["response"]["bodySize"].is_number()) bodySize = entry["response"]["bodySize"];
         int size = 0;
-        if (entry["response"]["content"].is_object() && entry["response"]["content"]["size"].is_number()) bodySize = entry["response"]["content"]["size"];
+        if (entry["response"]["content"].is_object() && entry["response"]["content"]["size"].is_number()) size = entry["response"]["content"]["size"];
+
+        response__body_size = size < 1 ? bodySize : size;
 
         if (entry["response"]["content"].is_object()
          && entry["response"]["content"]["text"].is_string()
          && (bodySize > 0 || size > 0)
          && entry["response"]["content"]["text"] != "") {
-          if (check_json_mime(entry["response"]["content"]["mimeType"]))
+
+          if (check_json_mime(entry["response"]["content"]["mimeType"])) {
             response__content = json::parse(entry["response"]["content"]["text"].get<string>()).dump(4);
-          else
-            response__content = entry["response"]["content"]["text"];
+          } else {
+            if (entry["response"]["content"]["encoding"] == "base64") {
+              string content = entry["response"]["content"]["text"];
+              response__content = base64::from_base64(content);
+            }
+            else {
+              response__content = entry["response"]["content"]["text"];
+            }
+          }
+
         } else {
           response__content = "<EMPTY>";
         }
@@ -208,9 +341,9 @@ public:
 
   float render(Rectangle b, float start_x, float width) {
     float height = 40;
+    bool is_hidden = true;
 
     if (b.y > GetScreenHeight() + 150) return 0.0;
-    if (b.y < 0) return 40;
 
     if (CheckCollisionPointRec(GetMousePosition(), {0, b.y, static_cast<float>(GetScreenWidth()), height-1})) {
       hover = true;
@@ -221,11 +354,18 @@ public:
       hover = false;
     }
 
+    if (b.y < 0 && !collapse) return 40;
+    if (b.y < -max_render_height && collapse) return max_render_height;
+
     Color color = MAGENTA;
     if (response__status / 100 == 2) {
       color = GREEN;
     } else if (response__status / 100 == 3) {
+      color = BLUE;
+    } else if (response__status / 100 == 4) {
       color = ORANGE;
+    } else if (response__status == 0) {
+      color = RED;
     } else {
       color = RED;
     }
@@ -245,15 +385,17 @@ public:
 
     stringstream sm;
     sm << request__method << " "
-      << response__status << " [duration: " << duration
-                                            << ", size: "
-                                            << pretty_bytes(response__body_size)
-                                            << ", at: "
-                                            << chrono::current_zone()->to_local(strated_date_time)
-                                            << "]";
+       << response__status << " ["
+       << "duration: " << duration
+       << ", size: " << pretty_bytes(response__body_size < 0 ? 0 : response__body_size)
+       << ", at: " << chrono::current_zone()->to_local(strated_date_time);
 
-    if (response__error != "")
-      sm << " ERROR: " << response__error;
+    if (server_ip_address != "")
+      sm << ", ip: " << server_ip_address;
+
+    sm << "]";
+
+    if (response__error != "") sm << " ERROR: " << response__error;
 
     sm << " " << request__url;
 
@@ -270,9 +412,10 @@ public:
     if (collapse) {
       stringstream sm;
       sm << ">>> info: " << endl
-         << "started at " << chrono::current_zone()->to_local(strated_date_time) << " (localtime)" << endl
-         << "started at " << strated_date_time << " (UTC)"
-         << endl;
+         << "started at: " << chrono::current_zone()->to_local(strated_date_time) << " (localtime)" << ", " << strated_date_time << " (UTC)" << endl
+         << "server ip address: " << server_ip_address << endl
+         << "from cache: " << from_cache << endl
+         ;
 
       height += DrawTextExx(sm.str(), {rect.x + 3, b.y + height}, BLACK).y;
 
@@ -298,6 +441,7 @@ public:
       DrawLine(rect.x, b.y, rect.x, b.y + height, BLACK);
     }
 
+    max_render_height = max_render_height < height - 2 ? height - 2 : max_render_height;
     return height - 2;
   }
 };
