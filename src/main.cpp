@@ -8,8 +8,9 @@
 #include <unistd.h>
 #include <thread>
 #include <raylib.h>
-#include <date/date.h>
+#include "./date.h"
 #include <chrono>
+#include <vector>
 #include "./font.h"
 #include "base64.hpp"
 
@@ -27,7 +28,7 @@ typedef enum Align {
   CENTER,
   START,
   END
-};
+} Align;
 
 static void DrawTextBoxedSelectable(Font font, const char *text, int length, Rectangle rec, float fontSize, float spacing, bool wordWrap, Color tint, int selectStart, int selectLength, Color selectTint, Color selectBackTint)
 {
@@ -142,8 +143,8 @@ static void DrawTextBoxed(string text, Rectangle rec, Color tint)
 
 
 Vector2 DrawTextExx(string text, Vector2 position, Color tint) {
-  auto m = MeasureTextEx(global_font, text.c_str(), 20, 0.4);
-  DrawTextEx(global_font, text.c_str(), {position.x, position.y}, 20, 0.4, tint);
+  auto m = MeasureTextEx(global_font, text.c_str(), 20, 0.1);
+  DrawTextEx(global_font, text.c_str(), {position.x, position.y}, 20, 0.1, tint);
 
   return m;
 }
@@ -171,13 +172,13 @@ datetime ParseISO8601(const std::string& input)
 {
     std::istringstream in{input};
     datetime tp;
-    in >> date::parse("%FT%TZ", tp);
+    in >> std::chrono::parse("%FT%TZ", tp);
     if (in.fail())
     {
         in.clear();
         in.exceptions(std::ios::failbit);
         in.str(input);
-        in >> date::parse("%FT%T%Ez", tp);
+        in >> std::chrono::parse("%FT%T%Ez", tp);
     }
     return tp;
 }

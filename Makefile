@@ -18,10 +18,10 @@ OUT=$(OUT_DIR)/$(OUT_NAME)-$(OUT_POSTFIX)
 all: exe
 
 run: exe
-	$(OUT) test2.har
+	$(OUT) test.har
 
 install: exe
-	cp $(OUT) ~/.local/bin/$(OUT_NAME)
+	cp $(OUT) ~/.local/bin/@$(OUT_NAME)
 
 debug: CXXFLAGS=$(STD) $(WARNINGS) -g $(SANITIZERS) -DDEBUG $(LIBS)
 debug: OUT_POSTFIX=debug
