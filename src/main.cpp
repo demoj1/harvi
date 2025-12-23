@@ -238,6 +238,7 @@ public:
   string request__url;
   string request__method;
   string request__content;
+  string request__rpc_method;
 
   string response__content;
   string response__error;
@@ -287,10 +288,18 @@ public:
 
     try {
       if (request__method == "POST" && entry["request"]["postData"].is_object() && entry["request"]["postData"]["mimeType"].is_string()) {
-        if (check_json_mime(entry["request"]["postData"]["mimeType"]))
-          request__content = json::parse(entry["request"]["postData"]["text"].get<string>()).dump(4);
-        else
+        if (check_json_mime(entry["request"]["postData"]["mimeType"])) {
+          auto request_json = json::parse(entry["request"]["postData"]["text"].get<string>());
+          request__content = request_json.dump(4);
+          if (request_json["method"].is_string()) {
+            request__rpc_method = request_json["method"].get<string>();
+          } else {
+            request__rpc_method = "(null)";
+          }
+        }
+        else {
           request__content = entry["request"]["postData"]["text"];
+        }
       } else {
         request__content = "<EMPTY>";
       }
@@ -386,7 +395,7 @@ public:
 
     stringstream sm;
     sm << request__method << " "
-       << response__status << " ["
+       << response__status << " (" << request__rpc_method << ") ["
        << "duration: " << duration
        << ", size: " << pretty_bytes(response__body_size < 0 ? 0 : response__body_size)
        << ", at: " << chrono::current_zone()->to_local(strated_date_time);
